@@ -18,6 +18,7 @@ from json import dumps
 from cgi import escape
 
 import os
+import re
 import logging
 import logging.config
 
@@ -55,6 +56,13 @@ class ApiEndpoints(dict):
 
     main_cfg_values = {}
 
+    timeperiod_regex = re.compile(
+        '^(monday|tuesday|wednesday|thursday|friday|saturday|sunday)'
+        '\s+'
+        '(?P<hh1>\d\d):(?P<mm1>\d\d)'
+        '-'
+        '(?P<hh2>\d\d):(?P<mm2>\d\d)$')
+
     def __init__(self):
         # create a map of valid endpoints/arguments
         for endpoint in Model.all_attributes.object_definitions.keys():
@@ -83,8 +91,33 @@ class ApiEndpoints(dict):
     def get_unique_key(self, endpoint):
         return self.endpoint_keys[endpoint]
 
+    @staticmethod
+    def _validate_timeperiod(h1, m1, h2, m2):
+        def validate_hhmm(hh, mm):
+            return (0 <= hh <= 24) and (0 <= mm <= 60) and (hh < 24 or mm == 0)
+
+        return (  # let's run a couple of rules to determine that hh:mm <= hh:mm
+            validate_hhmm(h1, m1) and
+            validate_hhmm(h2, m2) and
+            (h1 < h2 or (h1 == h2 and m1 <= m2))
+        )
+
     def validate(self, endpoint, data={}):
         for attr in data.keys():
+            if endpoint == 'timeperiod':
+                match = self.timeperiod_regex.match(attr)  # all information is in key
+                if match:
+                    if data[attr] != "":  # only empty values are supported by PyNag
+                        return {400: "timeperiod has to have empty value due to PyNag limitation: %s" % (attr,)}
+
+                    h1, m1, h2, m2 = (int(match.group('hh1')), int(match.group('mm1')),
+                                      int(match.group('hh2')), int(match.group('mm2')))
+
+                    if self._validate_timeperiod(h1, m1, h2, m2):
+                        continue
+                    else:
+                        return {400: "timeperiod part hh:mm-hh:mm is incorrect: %s" % (attr,)}
+
             if not attr.startswith('_') and attr not in self[endpoint]:
                 return {404: "unknown attribute: %s" % (attr, )}
             if attr == self.endpoint_keys[endpoint]:
